@@ -1,6 +1,7 @@
 {
   "name": "go_router",
-  "zoomImages": "true",
+  "zoomImages": "false",
+  "zoomImagesComment": "turning off zoom site-wide to enable images w/ links",
   "sidebar": [
     [
       "Welcome",
