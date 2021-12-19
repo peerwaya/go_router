@@ -28,6 +28,8 @@ class GoRouter extends ChangeNotifier with NavigatorObserver {
     bool debugLogDiagnostics = false,
     TransitionBuilder? navigatorBuilder,
     String? restorationScopeId,
+    GoRouterMultiMatchStrategy multiMatchStrategy =
+        GoRouterMultiMatchStrategy.matchNone,
   }) {
     if (urlPathStrategy != null) setUrlPathStrategy(urlPathStrategy);
 
@@ -47,6 +49,7 @@ class GoRouter extends ChangeNotifier with NavigatorObserver {
         goRouter: this,
         child: navigatorBuilder?.call(context, nav) ?? nav,
       ),
+      multiMatchStrategy: multiMatchStrategy,
     );
   }
 

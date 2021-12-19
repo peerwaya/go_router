@@ -9,6 +9,18 @@ import 'go_router_state.dart';
 import 'logging.dart';
 import 'typedefs.dart';
 
+/// Decides how to resolve multiple matching routes
+enum GoRouterMultiMatchStrategy {
+  /// return the first matching route,
+  matchFirst,
+
+  /// return the last matching route,
+  matchLast,
+
+  /// do not match, this will throw an error if multiple matches,
+  matchNone,
+}
+
 /// GoRouter implementation of the RouterDelegate base class.
 class GoRouterDelegate extends RouterDelegate<Uri>
     with
@@ -17,18 +29,18 @@ class GoRouterDelegate extends RouterDelegate<Uri>
         ChangeNotifier {
   /// Constructor for GoRouter's implementation of the
   /// RouterDelegate base class.
-  GoRouterDelegate({
-    required this.builderWithNav,
-    required this.routes,
-    required this.errorPageBuilder,
-    required this.topRedirect,
-    required this.redirectLimit,
-    required this.refreshListenable,
-    required Uri initUri,
-    required this.observers,
-    required this.debugLogDiagnostics,
-    this.restorationScopeId,
-  }) {
+  GoRouterDelegate(
+      {required this.builderWithNav,
+      required this.routes,
+      required this.errorPageBuilder,
+      required this.topRedirect,
+      required this.redirectLimit,
+      required this.refreshListenable,
+      required Uri initUri,
+      required this.observers,
+      required this.debugLogDiagnostics,
+      this.restorationScopeId,
+      this.multiMatchStrategy = GoRouterMultiMatchStrategy.matchNone}) {
     // check top-level route paths are valid
     for (final route in routes) {
       if (!route.path.startsWith('/')) {
@@ -49,6 +61,9 @@ class GoRouterDelegate extends RouterDelegate<Uri>
     // when the listener changes, refresh the route
     refreshListenable?.addListener(refresh);
   }
+
+  /// stratgy that defines how to resolve multiple matching routes
+  final GoRouterMultiMatchStrategy multiMatchStrategy;
 
   /// Builder function for a go router with Navigator.
   final GoRouterBuilderWithNav builderWithNav;
@@ -416,7 +431,7 @@ class GoRouterDelegate extends RouterDelegate<Uri>
     Object? extra,
   }) {
     final uri = Uri.parse(location);
-    final matchStacks = _getLocRouteMatchStacks(
+    var matchStacks = _getLocRouteMatchStacks(
       loc: uri.path,
       restLoc: uri.path,
       routes: routes,
@@ -431,14 +446,25 @@ class GoRouterDelegate extends RouterDelegate<Uri>
     }
 
     if (matchStacks.length > 1) {
-      final sb = StringBuffer()
-        ..writeln('too many routes for location: $location');
+      switch (multiMatchStrategy) {
+        case GoRouterMultiMatchStrategy.matchFirst:
+          matchStacks = [matchStacks.first];
+          break;
+        case GoRouterMultiMatchStrategy.matchLast:
+          matchStacks = [matchStacks.last];
+          break;
+        case GoRouterMultiMatchStrategy.matchNone:
+          {
+            final sb = StringBuffer()
+              ..writeln('too many routes for location: $location');
 
-      for (final stack in matchStacks) {
-        sb.writeln('\t${stack.map((m) => m.route.path).join(' => ')}');
+            for (final stack in matchStacks) {
+              sb.writeln('\t${stack.map((m) => m.route.path).join(' => ')}');
+            }
+
+            throw Exception(sb.toString());
+          }
       }
-
-      throw Exception(sb.toString());
     }
 
     if (kDebugMode) {
