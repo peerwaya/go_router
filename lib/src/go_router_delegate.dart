@@ -1,12 +1,14 @@
 import 'dart:async';
-
 import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 
+import '../go_router.dart';
 import 'go_route.dart';
 import 'go_route_match.dart';
+import 'go_router_cupertino.dart';
+import 'go_router_error_page.dart';
+import 'go_router_material.dart';
 import 'go_router_state.dart';
-import 'logging.dart';
 import 'typedefs.dart';
 
 /// Decides how to resolve multiple matching routes
@@ -29,18 +31,20 @@ class GoRouterDelegate extends RouterDelegate<Uri>
         ChangeNotifier {
   /// Constructor for GoRouter's implementation of the
   /// RouterDelegate base class.
-  GoRouterDelegate(
-      {required this.builderWithNav,
-      required this.routes,
-      required this.errorPageBuilder,
-      required this.topRedirect,
-      required this.redirectLimit,
-      required this.refreshListenable,
-      required Uri initUri,
-      required this.observers,
-      required this.debugLogDiagnostics,
-      this.restorationScopeId,
-      this.multiMatchStrategy = GoRouterMultiMatchStrategy.matchNone}) {
+  GoRouterDelegate({
+    required this.builderWithNav,
+    required this.routes,
+    required this.errorPageBuilder,
+    required this.errorBuilder,
+    required this.topRedirect,
+    required this.redirectLimit,
+    required this.refreshListenable,
+    required Uri initUri,
+    required this.observers,
+    required this.debugLogDiagnostics,
+    this.restorationScopeId,
+    this.multiMatchStrategy = GoRouterMultiMatchStrategy.matchNone
+  }) {
     // check top-level route paths are valid
     for (final route in routes) {
       if (!route.path.startsWith('/')) {
@@ -72,7 +76,10 @@ class GoRouterDelegate extends RouterDelegate<Uri>
   final List<GoRoute> routes;
 
   /// Error page builder for the go router delegate.
-  final GoRouterPageBuilder errorPageBuilder;
+  final GoRouterPageBuilder? errorPageBuilder;
+
+  /// Error widget builder for the go router delegate.
+  final GoRouterWidgetBuilder? errorBuilder;
 
   /// Top level page redirect.
   final GoRouterRedirect topRedirect;
@@ -200,27 +207,15 @@ class GoRouterDelegate extends RouterDelegate<Uri>
 
   /// For use by the Router architecture as part of the RouterDelegate.
   @override
-  Uri get currentConfiguration {
-    log2('GoRouterDelegate.currentConfiguration: $location');
-    return Uri.parse(location);
-  }
+  Uri get currentConfiguration => Uri.parse(location);
 
   /// For use by the Router architecture as part of the RouterDelegate.
   @override
-  Widget build(BuildContext context) {
-    log2('GoRouterDelegate.build: matches=');
-    for (final match in matches) {
-      log2('  $match');
-    }
-
-    return _builder(context, _matches);
-  }
+  Widget build(BuildContext context) => _builder(context, _matches);
 
   /// For use by the Router architecture as part of the RouterDelegate.
   @override
   Future<void> setInitialRoutePath(Uri configuration) {
-    log2('GoRouterDelegate.setInitialRoutePath: configuration= $configuration');
-
     // if the initial location is /, then use the dev initial location;
     // otherwise, we're cruising to a deep link, so ignore dev initial location
     final config = configuration.toString();
@@ -239,7 +234,6 @@ class GoRouterDelegate extends RouterDelegate<Uri>
   /// For use by the Router architecture as part of the RouterDelegate.
   @override
   Future<void> setNewRoutePath(Uri configuration) async {
-    log2('GoRouterDelegate.setNewRoutePath: configuration= $configuration');
     final config = configuration.toString();
     _log('going to $config');
     _go(config);
@@ -402,7 +396,7 @@ class GoRouterDelegate extends RouterDelegate<Uri>
           extra: null,
           route: GoRoute(
             path: location,
-            pageBuilder: (context, state) => errorPageBuilder(
+            pageBuilder: (context, state) => _errorPageBuilder(
               context,
               GoRouterState(
                 this,
@@ -643,7 +637,7 @@ class GoRouterDelegate extends RouterDelegate<Uri>
       // if there's an error, show an error page
       final uri = Uri.parse(location);
       pages = [
-        errorPageBuilder(
+        _errorPageBuilder(
           context,
           GoRouterState(
             this,
@@ -668,7 +662,6 @@ class GoRouterDelegate extends RouterDelegate<Uri>
         onPopPage: (route, dynamic result) {
           if (!route.didPop(result)) return false;
 
-          log2('GoRouterDelegate.onPopPage: matches.last= ${_matches.last}');
           _matches.remove(_matches.last);
           if (_matches.isEmpty) {
             throw Exception(
@@ -721,22 +714,103 @@ class GoRouterDelegate extends RouterDelegate<Uri>
       params = {...params, ...match.decodedParams};
 
       // get a page from the builder and associate it with a sub-location
-      yield match.route.pageBuilder(
-        context,
-        GoRouterState(
-          this,
-          location: location,
-          subloc: match.subloc,
-          name: match.route.name,
-          path: match.route.path,
-          fullpath: match.fullpath,
-          params: params,
-          queryParams: match.queryParams,
-          extra: match.extra,
-          pageKey: match.pageKey, // push() remaps the page key for uniqueness
-        ),
+      final state = GoRouterState(
+        this,
+        location: location,
+        subloc: match.subloc,
+        name: match.route.name,
+        path: match.route.path,
+        fullpath: match.fullpath,
+        params: params,
+        queryParams: match.queryParams,
+        extra: match.extra,
+        pageKey: match.pageKey, // push() remaps the page key for uniqueness
       );
+
+      yield match.route.pageBuilder != null
+          ? match.route.pageBuilder!(context, state)
+          : _pageBuilder(context, state, match.route.builder);
     }
+  }
+
+  Page<void> Function(LocalKey key, String restorationId, Widget child)?
+      _pageBuilderForAppType;
+  Widget Function(BuildContext context, GoRouterState state)?
+      _errorBuilderForAppType;
+
+  void _cacheAppType(BuildContext context) {
+    // cache app type-specific page and error builders
+    if (_pageBuilderForAppType == null) {
+      assert(_errorBuilderForAppType == null);
+
+      // can be null during testing
+      final elem = context is Element ? context : null;
+
+      if (elem != null && isMaterialApp(elem)) {
+        _log('MaterialApp found');
+        _pageBuilderForAppType = pageBuilderForMaterialApp;
+        _errorBuilderForAppType =
+            (c, s) => GoRouterMaterialErrorScreen(s.error);
+      } else if (elem != null && isCupertinoApp(elem)) {
+        _log('CupertinoApp found');
+        _pageBuilderForAppType = pageBuilderForCupertinoApp;
+        _errorBuilderForAppType =
+            (c, s) => GoRouterCupertinoErrorScreen(s.error);
+      } else {
+        _log('WidgetsApp assumed');
+        _pageBuilderForAppType = pageBuilderForWidgetApp;
+        _errorBuilderForAppType = (c, s) => GoRouterErrorScreen(s.error);
+      }
+    }
+
+    assert(_pageBuilderForAppType != null);
+    assert(_errorBuilderForAppType != null);
+  }
+
+  // builds the page based on app type, i.e. MaterialApp vs. CupertinoApp
+  Page<dynamic> _pageBuilder(
+    BuildContext context,
+    GoRouterState state,
+    GoRouterWidgetBuilder builder,
+  ) {
+    // build the page based on app type
+    _cacheAppType(context);
+    return _pageBuilderForAppType!(
+      state.pageKey,
+      state.pageKey.value,
+      builder(context, state),
+    );
+  }
+
+  /// Builds a page without any transitions.
+  Page<void> pageBuilderForWidgetApp(
+    LocalKey key,
+    String restorationId,
+    Widget child,
+  ) =>
+      NoTransitionPage<void>(
+        key: key,
+        restorationId: restorationId,
+        child: child,
+      );
+
+  Page<void> _errorPageBuilder(
+    BuildContext context,
+    GoRouterState state,
+  ) {
+    // if the error page builder is provided, use that; otherwise, if the error
+    // builder is provided, wrap that in an app-specific page, e.g.
+    // MaterialPage; finally, if nothing is provided, use a default error page
+    // wrapped in the app-specific page, e.g.
+    // MaterialPage(GoRouterMaterialErrorPage(...))
+    _cacheAppType(context);
+    return errorPageBuilder != null
+        ? errorPageBuilder!(context, state)
+        : _pageBuilder(
+            context,
+            state,
+            errorBuilder ?? _errorBuilderForAppType!,
+          );
   }
 
   void _outputKnownRoutes() {
@@ -767,8 +841,22 @@ class GoRouterDelegate extends RouterDelegate<Uri>
   }
 
   static String _canonicalUri(String loc) {
-    final canon = Uri.parse(loc).toString();
-    return canon.endsWith('?') ? canon.substring(0, canon.length - 1) : canon;
+    var canon = Uri.parse(loc).toString();
+    canon = canon.endsWith('?') ? canon.substring(0, canon.length - 1) : canon;
+
+    // remove trailing slash except for when you shouldn't, e.g.
+    // /profile/ => /profile
+    // / => /
+    // /login?from=/ => login?from=/
+    canon = canon.endsWith('/') && canon != '/' && !canon.contains('?')
+        ? canon.substring(0, canon.length - 1)
+        : canon;
+
+    // /login/?from=/ => /login?from=/
+    // /?from=/ => /?from=/
+    canon = canon.replaceFirst('/?', '?', 1);
+
+    return canon;
   }
 
   static String _addQueryParams(String loc, Map<String, String> queryParams) {
@@ -779,9 +867,6 @@ class GoRouterDelegate extends RouterDelegate<Uri>
   }
 
   void _safeNotifyListeners() {
-    log2('GoRouterDelegate.safeNotifyListeners: WidgetsBinding.instance= '
-        '${WidgetsBinding.instance == null ? 'null' : 'non-null'}');
-
     // this is a hack to fix the following error:
     // The following assertion was thrown while dispatching notifications for
     // GoRouterDelegate: setState() or markNeedsBuild() called during build.
